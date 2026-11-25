@@ -1,0 +1,36 @@
+{
+  "name": "maramia-uae",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@fontsource/cairo": "5.3.0",
+    "@fontsource/dm-sans": "5.3.0",
+    "@fontsource/playfair-display": "5.3.0",
+    "framer-motion": "12.38.0",
+    "lucide-react": "0.468.0",
+    "qrcode-generator": "2.0.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router-dom": "6.30.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "autoprefixer": "10.4.27",
+    "jsqr": "1.4.0",
+    "postcss": "8.5.9",
+    "tailwindcss": "3.4.19",
+    "typescript": "5.9.3",
+    "vite": "7.3.8"
+  }
+}

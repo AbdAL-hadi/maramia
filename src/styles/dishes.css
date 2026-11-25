@@ -1,0 +1,53 @@
+.signature-reveal { block-size: 100%; }
+.menu-dish-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  animation: menu-card-in 320ms ease both;
+}
+@keyframes menu-card-in { from { opacity: .68; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.dish-card-visual { position: relative; }
+.signature-tag {
+  position: absolute;
+  inset: 9px auto auto 9px;
+  inset-inline: 9px auto;
+  padding: 3px 9px;
+  border-radius: 2px;
+  background: var(--deep-forest);
+  color: #f5d9a8;
+  font-size: .78rem;
+  font-weight: 700;
+}
+.menu-dish-card .dish-body { display: flex; flex: 1; flex-direction: column; padding-block-end: 12px; }
+.dish-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 0 12px; flex-wrap: wrap; margin-block-start: auto; padding-block-start: 8px; }
+.dish-details-link { display: inline-flex; align-items: center; min-block-size: 44px; color: var(--forest); font-size: .94rem; font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
+.dish-details-link:hover { color: var(--gold-dark); }
+.dish-details-link::after { content: ''; position: absolute; inset: 0; }
+.vegetarian-tag { display: inline-flex; align-items: center; gap: 5px; color: #3d614a; font-size: .875rem; font-weight: 700; }
+.vegetarian-tag svg { flex: none; }
+
+.dish-image-fallback {
+  isolation: isolate;
+  position: relative;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #314a3c;
+  color: #f1d29c;
+  text-align: center;
+  padding: 12px;
+}
+.dish-image-fallback--cold-beverages { background: #34504b; }
+.dish-image-fallback--charcoal-grill, .dish-image-fallback--hot-mezze { background: #523b2e; }
+.dish-image-fallback--desserts, .dish-image-fallback--hot-beverages { background: #574533; }
+.dish-image-fallback span { font-size: .83rem; letter-spacing: .1em; text-transform: uppercase; }
+:lang(ar) .dish-image-fallback span { letter-spacing: 0; }
+.dish-fallback-sprig { position: absolute; inset: auto 12% -12%; z-index: -1; inline-size: 44%; block-size: auto; color: #e1be8335; transform: rotate(26deg); }
+
+@media (max-width: 700px) {
+  .dish-details-link, .vegetarian-tag { font-size: .86rem; }
+}

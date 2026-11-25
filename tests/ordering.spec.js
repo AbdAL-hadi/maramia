@@ -1,0 +1,293 @@
+import { expect, test } from '@playwright/test'
+
+const storageKey = 'maramia.ordering.v1'
+const checkoutForm = '#maramia-checkout-form'
+const cartButton = (page) => page.locator('.header-cart')
+const storedOrderState = (page) => page.evaluate((key) => JSON.parse(localStorage.getItem(key)), storageKey)
+
+async function english(page) {
+  await page.goto('/menu')
+  await page.locator('header').getByRole('button', { name: 'Switch to English' }).click()
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+}
+
+async function addDish(page, slug, { portion, note, quantity = 1 } = {}) {
+  await page.goto(`/menu?dish=${slug}`)
+  const dialog = page.getByRole('dialog')
+  if (portion) await dialog.getByRole('radio', { name: portion }).check()
+  if (note) await dialog.getByRole('textbox', { name: 'Special Instructions' }).fill(note)
+  for (let index = 1; index < quantity; index++) await dialog.getByRole('button', { name: 'Increase Quantity' }).click()
+  await dialog.getByRole('button', { name: 'Add to Cart' }).click()
+  await expect(dialog.getByRole('status').filter({ hasText: 'Added to your cart.' })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Continue Shopping' }).click()
+  await expect(dialog).toHaveCount(0)
+}
+
+async function fillContact(page, phone = '+971 (50) 123-4567') {
+  await page.locator(checkoutForm).getByLabel('Full name').fill('Demo Guest')
+  await page.getByLabel('UAE Phone Number').fill(phone)
+  await page.locator(checkoutForm).getByLabel('Email address').fill('sample@example.test')
+}
+
+async function fillDelivery(page) {
+  await page.getByLabel('Emirate').selectOption('dubai')
+  await page.getByLabel('Area or District').fill('Sample District')
+  await page.getByLabel('Building or Villa').fill('Sample Villa')
+  await page.getByLabel('Address Details').fill('Sample Address')
+  await page.getByLabel('Delivery Instructions').fill('Sample Instructions')
+}
+
+test('cart groups matching dishes and keeps different notes and portions separate after reload', async ({ page }) => {
+  await english(page)
+  await addDish(page, 'charcoal-chicken', { note: 'Sauce on the side' })
+  await addDish(page, 'charcoal-chicken', { note: 'Sauce on the side' })
+  await addDish(page, 'charcoal-chicken', { portion: /Whole Chicken/, note: 'Sauce on the side' })
+  await addDish(page, 'charcoal-chicken', { note: 'Extra lemon' })
+  await page.reload()
+  await expect(cartButton(page)).toHaveAccessibleName('Open Cart (4)')
+  await cartButton(page).press('Enter')
+  const drawer = page.getByRole('dialog', { name: 'Your Cart' })
+  await expect(drawer).toBeVisible()
+  await expect(drawer.getByRole('button', { name: 'Close Cart' })).toBeFocused()
+  await expect(drawer.getByTestId('cart-line')).toHaveCount(3)
+  await expect(drawer.getByText('Whole Chicken', { exact: true })).toBeVisible()
+  await expect(drawer.getByText('Sauce on the side', { exact: true })).toHaveCount(2)
+  await expect(drawer.getByText('Extra lemon', { exact: true })).toBeVisible()
+  await expect(drawer.getByTestId('cart-subtotal')).toHaveText(/AED\s+303/)
+  await page.keyboard.press('Escape')
+  await expect(drawer).toHaveCount(0)
+  await expect(cartButton(page)).toBeFocused()
+})
+
+test('drawer updates quantities, portions and notes, and supports remove and clear', async ({ page }) => {
+  await english(page)
+  await addDish(page, 'charcoal-chicken')
+  await addDish(page, 'hummus')
+  await cartButton(page).click()
+  const drawer = page.getByRole('dialog', { name: 'Your Cart' })
+  const chicken = drawer.getByTestId('cart-line').filter({ hasText: 'Charcoal-Grilled Chicken' })
+  await chicken.getByRole('button', { name: 'Increase Quantity' }).click()
+  await chicken.getByRole('button', { name: 'Edit Dish' }).click()
+  await chicken.getByLabel('Portion').selectOption('whole')
+  await chicken.getByLabel('Special Instructions').fill('Keep warm')
+  await chicken.getByRole('button', { name: 'Save Changes' }).click()
+  await expect(chicken).toContainText('Whole Chicken')
+  await expect(chicken).toContainText('Keep warm')
+  await expect(drawer.getByTestId('cart-subtotal')).toHaveText(/AED\s+244/)
+  await drawer.getByTestId('cart-line').filter({ hasText: 'Hummus' }).getByRole('button', { name: 'Remove Dish' }).click()
+  await expect(drawer.getByTestId('cart-line')).toHaveCount(1)
+  await expect(drawer.getByTestId('cart-subtotal')).toHaveText(/AED\s+216/)
+  await drawer.getByRole('button', { name: 'Clear Cart' }).click()
+  await expect(drawer.getByRole('heading', { name: 'Your Cart Is Empty' })).toBeVisible()
+  await expect(drawer.getByRole('link', { name: 'Proceed to Checkout' })).toHaveCount(0)
+  await drawer.getByRole('button', { name: 'Continue Shopping' }).click()
+  await expect(cartButton(page)).toHaveAccessibleName('Open Cart (0)')
+})
+
+test('outdated cart entries are dropped and prices are read from the catalog', async ({ page }) => {
+  await page.addInitScript((key) => {
+    localStorage.setItem('maramia.language', '"en"')
+    localStorage.setItem(key, JSON.stringify({ cart: [
+      { id: 'ok', itemId: 'hummus', variantId: null, quantity: 2, instructions: ' ', unitPrice: 1 },
+      { id: 'invalid', itemId: 'removed-dish', variantId: null, quantity: 1, instructions: '' },
+      { id: 'old-portion', itemId: 'charcoal-chicken', variantId: 'outdated', quantity: 1, instructions: '' },
+      { id: 'bad-count', itemId: 'hummus', variantId: null, quantity: -1, instructions: '' },
+    ], orders: [{ id: 'bad-order' }] }))
+  }, storageKey)
+  await page.goto('/menu')
+  await expect(cartButton(page)).toHaveAccessibleName('Open Cart (2)')
+  await cartButton(page).click()
+  await expect(page.getByTestId('cart-line')).toHaveCount(1)
+  await expect(page.getByTestId('cart-subtotal')).toHaveText(/AED\s+56/)
+})
+
+test('checkout prices both discount kinds and responds to invalid and inactive codes', async ({ page }) => {
+  await english(page)
+  await addDish(page, 'charcoal-chicken', { portion: /Whole Chicken/ })
+  await addDish(page, 'hummus')
+  await cartButton(page).click()
+  await page.getByRole('link', { name: 'Proceed to Checkout' }).click()
+  await expect(page).toHaveURL(/\/order$/)
+  await expect(page.getByTestId('order-subtotal')).toHaveText(/AED\s+136/)
+  await page.getByLabel('Emirate').selectOption('dubai')
+  await expect(page.getByTestId('delivery-fee')).toHaveText(/AED\s+12/)
+  await expect(page.getByTestId('order-total')).toHaveText(/AED\s+148/)
+  const promo = page.getByLabel('Promo Code')
+  const apply = page.getByRole('button', { name: 'Apply', exact: true })
+  await promo.fill('TABLE15')
+  await apply.click()
+  await expect(page.getByText('This promo code is invalid or inactive.')).toBeVisible()
+  await promo.fill('bad-code')
+  await apply.click()
+  await expect(page.getByText('This promo code is invalid or inactive.')).toBeVisible()
+  await promo.fill(' maramia10 ')
+  await apply.click()
+  await expect(page.getByText('Promo code applied.')).toBeVisible()
+  await expect(page.getByTestId('order-discount')).toContainText('13.60')
+  await expect(page.getByTestId('order-total')).toHaveText(/AED\s+134\.40/)
+  await promo.fill('WELCOME20')
+  await apply.click()
+  await expect(page.getByTestId('order-discount')).toContainText('20')
+  await expect(page.getByTestId('order-total')).toHaveText(/AED\s+128/)
+  await page.getByRole('radio', { name: 'Pickup', exact: true }).check()
+  await expect(page.getByTestId('delivery-fee')).toHaveCount(0)
+  await expect(page.getByTestId('order-total')).toHaveText(/AED\s+116/)
+  await page.getByRole('button', { name: 'Remove Promo' }).click()
+  await expect(page.getByTestId('order-total')).toHaveText(/AED\s+136/)
+})
+
+test('delivery minimums, recommendations and free-delivery progress reflect the cart', async ({ page }) => {
+  await english(page)
+  await addDish(page, 'hummus')
+  await page.goto('/order')
+  await page.getByLabel('Emirate').selectOption('dubai')
+  await expect(page.getByText(/The delivery minimum is AED\s+60/)).toBeVisible()
+  await page.getByLabel('Promo Code').fill('WELCOME20')
+  await page.getByRole('button', { name: 'Apply', exact: true }).click()
+  await expect(page.getByText(/requires a subtotal of AED\s+100/)).toBeVisible()
+  await expect(page.getByRole('link', { name: /Falafel/ })).toBeVisible()
+  await addDish(page, 'charcoal-chicken', { portion: /Whole Chicken/, quantity: 2 })
+  await page.goto('/order')
+  await page.getByLabel('Emirate').selectOption('dubai')
+  await expect(page.getByRole('progressbar', { name: 'Free Delivery Progress' })).toHaveAttribute('value', '18000')
+  await expect(page.getByTestId('delivery-fee')).toHaveText(/AED\s+0/)
+  await expect(page.getByText('Your order qualifies for demo free delivery.')).toBeVisible()
+})
+
+test('validates delivery and saves one non-sensitive order even with two submit events', async ({ page }) => {
+  await english(page)
+  await addDish(page, 'chicken-musakhan', { note: 'Sample food note' })
+  await page.goto('/order')
+  const submit = page.getByRole('button', { name: 'Place Demo Order' })
+  await submit.click()
+  await expect(page.locator(checkoutForm).getByLabel('Full name')).toBeFocused()
+  await expect(page.getByLabel('UAE Phone Number')).toHaveAttribute('aria-invalid', 'true')
+  await fillContact(page, '+44 20 1234 5678')
+  await fillDelivery(page)
+  await page.getByRole('radio', { name: 'Card Payment — Demo' }).check()
+  await expect(page.getByText('Payment methods are simulated. Payment details are unnecessary.')).toBeVisible()
+  await submit.click()
+  await expect(page.getByLabel('UAE Phone Number')).toBeFocused()
+  await expect(page.getByText('Enter a UAE phone number in local or +971 format.')).toBeVisible()
+  await page.getByLabel('UAE Phone Number').fill('+971 (50) 123-4567')
+  await page.getByLabel(/Order Notes/).fill('Sample order note')
+  await page.locator(checkoutForm).evaluate((form) => {
+    form.requestSubmit()
+    form.requestSubmit()
+  })
+  await expect(page).toHaveURL(/\/order\/MRA-[A-F0-9]{10}$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Demo Order Confirmed' })).toBeVisible()
+  await expect(page.getByTestId('order-total')).toHaveText(/AED\s+84/)
+  await expect(page.getByText('35–50 min')).toBeVisible()
+  await expect(cartButton(page)).toHaveAccessibleName('Open Cart (0)')
+  const state = await storedOrderState(page)
+  expect(state.orders).toHaveLength(1)
+  expect(state.cart).toEqual([])
+  expect(state.orders[0]).toMatchObject({ mode: 'delivery', payment: 'card', stage: 0 })
+  expect(JSON.stringify(state)).not.toMatch(/Demo Guest|sample@example|123-4567|Sample District|Sample (Villa|Address|Instructions|food note|order note)/)
+  const orderNumber = await page.getByTestId('order-number').textContent()
+  await page.reload()
+  await expect(page.getByTestId('order-number')).toHaveText(orderNumber)
+  await page.getByRole('link', { name: 'Track Order', exact: true }).click()
+  await expect(page.locator('[aria-current=step]')).toHaveText('Order Received')
+  await page.getByRole('button', { name: 'Advance Demo Status' }).click()
+  await expect(page.locator('[aria-current=step]')).toHaveText('Order Confirmed')
+  await page.getByRole('button', { name: 'Advance Demo Status' }).click()
+  await expect(page.locator('[aria-current=step]')).toHaveText('Preparing Your Food')
+  await page.getByRole('button', { name: 'Advance Demo Status' }).click()
+  await expect(page.locator('[aria-current=step]')).toHaveText('Out for Delivery')
+  await page.reload()
+  await expect(page.locator('[aria-current=step]')).toHaveText('Out for Delivery')
+  await page.getByRole('button', { name: 'Advance Demo Status' }).click()
+  await expect(page.locator('[aria-current=step]')).toHaveText('Completed')
+  await expect(page.getByRole('button', { name: 'Advance Demo Status' })).toHaveCount(0)
+})
+
+test('Arabic pickup uses the chosen time and a pickup-specific timeline', async ({ page }) => {
+  await page.goto('/menu?dish=hummus')
+  const dish = page.getByRole('dialog')
+  await dish.getByRole('button', { name: 'أضف إلى السلة' }).click()
+  await expect(dish.getByRole('status').filter({ hasText: 'أُضيف الطبق إلى سلتك.' })).toBeVisible()
+  await page.goto('/order')
+  await expect(page.locator('html')).toHaveAttribute('dir', 'rtl')
+  await page.getByRole('radio', { name: 'استلام من المطعم', exact: true }).check()
+  await expect(page.getByLabel('الإمارة', { exact: true })).toBeHidden()
+  await expect(page.getByText('مرامية الإمارات · موقع مقترح')).toBeVisible()
+  await page.locator(checkoutForm).getByLabel('الاسم الكامل').fill('ضيف تجريبي')
+  await page.getByLabel('رقم الهاتف الإماراتي').fill('٠٥٠ ١٢٣ ٤٥٦٧')
+  await page.locator(checkoutForm).getByLabel('البريد الإلكتروني').fill('pickup@example.test')
+  await page.getByRole('button', { name: 'أرسل طلبًا تجريبيًا' }).click()
+  await expect(page.getByLabel('موعد الاستلام')).toBeFocused()
+  await page.getByLabel('موعد الاستلام').selectOption('later')
+  await page.getByRole('radio', { name: 'Apple Pay · محاكاة' }).check()
+  await page.getByRole('button', { name: 'أرسل طلبًا تجريبيًا' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'تأكيد الطلب التجريبي' })).toBeVisible()
+  const state = await storedOrderState(page)
+  expect(state.orders[0]).toMatchObject({ mode: 'pickup', payment: 'apple-pay', window: [45, 55], amounts: { subtotal: 2800, total: 2800, deliveryFee: 0 } })
+  await page.getByRole('link', { name: 'تتبّع الطلب', exact: true }).click()
+  const advance = page.getByRole('button', { name: 'انتقل إلى المرحلة التالية' })
+  for (let step = 0; step < 3; step++) await advance.click()
+  await expect(page.locator('[aria-current=step]')).toHaveText('جاهز للاستلام')
+})
+
+test('checkout retains the cart when saving the simulated order fails', async ({ page }) => {
+  await english(page)
+  await addDish(page, 'hummus')
+  await page.goto('/order')
+  await page.getByRole('radio', { name: 'Pickup', exact: true }).check()
+  await page.getByLabel('Pickup Time').selectOption('earliest')
+  await fillContact(page, '00971 4 123 4567')
+  await page.evaluate((key) => {
+    const setItem = Storage.prototype.setItem
+    Storage.prototype.setItem = function (name, value) {
+      if (name === key && JSON.parse(value).orders.length) throw new Error('Storage unavailable')
+      return setItem.call(this, name, value)
+    }
+  }, storageKey)
+  await page.getByRole('button', { name: 'Place Demo Order' }).click()
+  await expect(page.getByRole('alert')).toHaveText('The demo order could not be saved. Your items are still in your cart.')
+  await expect(page).toHaveURL(/\/order$/)
+  await expect(cartButton(page)).toHaveAccessibleName('Open Cart (1)')
+  expect((await storedOrderState(page)).orders).toEqual([])
+})
+
+for (const language of ['ar', 'en']) {
+  test(`checkout and drawer fit the five requested widths in ${language}`, async ({ page }) => {
+    const failures = []
+    page.on('pageerror', (error) => failures.push(error.message))
+    page.on('console', (message) => { if (message.type() === 'error') failures.push(message.text()) })
+    page.on('response', (response) => { if (response.status() >= 400) failures.push(response.url()) })
+    await page.addInitScript(({ storageKey, language }) => {
+      localStorage.setItem('maramia.language', JSON.stringify(language))
+      localStorage.setItem(storageKey, JSON.stringify({
+        cart: [{ id: 'responsive', itemId: 'charcoal-chicken', variantId: 'half', quantity: 2, instructions: 'A demo note for the requested portion' }],
+        orders: [],
+      }))
+    }, { storageKey, language })
+    await page.goto('/order')
+    await expect(page.locator('html')).toHaveAttribute('dir', language === 'ar' ? 'rtl' : 'ltr')
+    for (const width of [320, 375, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 850 })
+      await page.evaluate(() => document.fonts.ready)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
+      await cartButton(page).click()
+      const drawer = page.getByRole('dialog')
+      await expect(drawer.getByTestId('cart-line')).toHaveCount(1)
+      const bounds = await drawer.boundingBox()
+      expect(bounds.x).toBe(language === 'ar' ? 0 : width - bounds.width)
+      expect(bounds.width).toBeLessThanOrEqual(width)
+      expect(await drawer.evaluate((node) => node.scrollWidth === node.clientWidth)).toBe(true)
+      await page.keyboard.press('Escape')
+      await expect(drawer).toHaveCount(0)
+      await expect(cartButton(page)).toBeFocused()
+    }
+    const images = await page.locator('main img').evaluateAll(async (images) => Promise.all(images.map(async (image) => {
+      image.loading = 'eager'
+      await image.decode()
+      return image.naturalWidth
+    })))
+    expect(images).toHaveLength(4)
+    expect(images.every(Boolean)).toBe(true)
+    expect(failures).toEqual([])
+  })
+}
